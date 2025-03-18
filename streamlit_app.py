@@ -21,17 +21,29 @@ st.set_page_config(
 )
 
 # Utility functions for database operations
+@st.cache_resource
+def get_connection(db_path):
+    """Create a cached database connection"""
+    # Create the data directory if it doesn't exist
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    # Connect with extended timeout and disable same thread check for Streamlit
+    return sqlite3.connect(db_path, timeout=30, check_same_thread=False)
+
 class SentimentDatabase:
-    def __init__(self, db_path="data/drake_sentiment.db"):
+    def __init__(self, db_path="./.streamlit/drake_sentiment.db"):
         """Initialize database connection"""
         self.db_path = db_path
         self._initialize_db()
     
     def _get_connection(self):
         """Get a database connection"""
-        # Create the data directory if it doesn't exist
-        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        return sqlite3.connect(self.db_path)
+        try:
+            # Use cached connection
+            return get_connection(self.db_path)
+        except Exception as e:
+            st.error(f"Database connection error: {e}")
+            # Fallback to in-memory if there's an error
+            return sqlite3.connect(":memory:")
     
     def _initialize_db(self):
         """Initialize database tables if they don't exist"""
@@ -85,98 +97,105 @@ class SentimentDatabase:
     
     def get_sentiment_analyses(self, model_name=None):
         """Get sentiment analyses from the database"""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        if model_name:
-            cursor.execute('''
-            SELECT sa.id, sa.song_id, s.title, sa.model_name, sa.sentiment_score, sa.sentiment_category
-            FROM sentiment_analysis sa
-            JOIN songs s ON sa.song_id = s.id
-            WHERE sa.model_name = ?
-            ''', (model_name,))
-        else:
-            cursor.execute('''
-            SELECT sa.id, sa.song_id, s.title, sa.model_name, sa.sentiment_score, sa.sentiment_category
-            FROM sentiment_analysis sa
-            JOIN songs s ON sa.song_id = s.id
-            ''')
-        
-        results = cursor.fetchall()
-        conn.close()
-        
-        analyses = []
-        for row in results:
-            analyses.append({
-                'id': row[0],
-                'song_id': row[1],
-                'title': row[2],
-                'model_name': row[3],
-                'sentiment_score': row[4],
-                'sentiment_category': row[5]
-            })
-        
-        return analyses
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            if model_name:
+                cursor.execute('''
+                SELECT sa.id, sa.song_id, s.title, sa.model_name, sa.sentiment_score, sa.sentiment_category
+                FROM sentiment_analysis sa
+                JOIN songs s ON sa.song_id = s.id
+                WHERE sa.model_name = ?
+                ''', (model_name,))
+            else:
+                cursor.execute('''
+                SELECT sa.id, sa.song_id, s.title, sa.model_name, sa.sentiment_score, sa.sentiment_category
+                FROM sentiment_analysis sa
+                JOIN songs s ON sa.song_id = s.id
+                ''')
+            
+            results = cursor.fetchall()
+            
+            analyses = []
+            for row in results:
+                analyses.append({
+                    'id': row[0],
+                    'song_id': row[1],
+                    'title': row[2],
+                    'model_name': row[3],
+                    'sentiment_score': row[4],
+                    'sentiment_category': row[5]
+                })
+            
+            return analyses
+        except Exception as e:
+            st.error(f"Error retrieving sentiment analyses: {str(e)}")
+            return []
     
     def save_sentiment_analysis(self, song_id, model_name, sentiment_score, sentiment_category=None):
         """Save a sentiment analysis to the database"""
-        conn = self._get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-        INSERT INTO sentiment_analysis (song_id, model_name, sentiment_score, sentiment_category)
-        VALUES (?, ?, ?, ?)
-        ''', (song_id, model_name, sentiment_score, sentiment_category))
-        
-        sa_id = cursor.lastrowid
-        
-        conn.commit()
-        conn.close()
-        
-        return sa_id
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+            INSERT INTO sentiment_analysis (song_id, model_name, sentiment_score, sentiment_category)
+            VALUES (?, ?, ?, ?)
+            ''', (song_id, model_name, sentiment_score, sentiment_category))
+            
+            sa_id = cursor.lastrowid
+            
+            conn.commit()
+            
+            return sa_id
+        except Exception as e:
+            st.error(f"Error saving sentiment analysis: {str(e)}")
+            return None
 
 # Initialize sample data
 def initialize_sample_data(db):
     """Initialize sample data if database is empty"""
-    conn = db._get_connection()
-    cursor = conn.cursor()
-    
-    # Check if we have any songs
-    cursor.execute("SELECT COUNT(*) FROM songs")
-    count = cursor.fetchone()[0]
-    
-    if count == 0:
-        # Load sample data from data directory
-        try:
-            # Add sample songs
-            sample_songs = [
-                ("Hotline Bling", "Views", "2016-04-29", 
-                 "You used to call me on my cell phone\nLate night when you need my love\nCall me on my cell phone\nLate night when you need my love\nI know when that hotline bling\nThat can only mean one thing\nI know when that hotline bling\nThat can only mean one thing", 
-                 "https://genius.com/Drake-hotline-bling-lyrics"),
-                ("God's Plan", "Scorpion", "2018-06-29", 
-                 "Yeah, they wishin' and wishin' and wishin' and wishin'\nThey wishin' on me, yeah\nI been movin' calm, don't start no trouble with me\nTryna keep it peaceful is a struggle for me\nDon't pull up at 6 AM to cuddle with me\nYou know how I like it when you lovin' on me\nI don't wanna die for them",
-                 "https://genius.com/Drake-gods-plan-lyrics"),
-            ]
-            
-            # Insert each sample song into the database
-            for song in sample_songs:
-                cursor.execute('''
-                INSERT INTO songs (title, album, release_date, lyrics, lyrics_url)
-                VALUES (?, ?, ?, ?, ?)
-                ''', song)
+    try:
+        conn = db._get_connection()
+        cursor = conn.cursor()
+        
+        # Check if we have any songs
+        cursor.execute("SELECT COUNT(*) FROM songs")
+        count = cursor.fetchone()[0]
+        
+        if count == 0:
+            # Load sample data from data directory
+            try:
+                # Add sample songs
+                sample_songs = [
+                    ("Hotline Bling", "Views", "2016-04-29", 
+                     "You used to call me on my cell phone\nLate night when you need my love\nCall me on my cell phone\nLate night when you need my love\nI know when that hotline bling\nThat can only mean one thing\nI know when that hotline bling\nThat can only mean one thing", 
+                     "https://genius.com/Drake-hotline-bling-lyrics"),
+                    ("God's Plan", "Scorpion", "2018-06-29", 
+                     "Yeah, they wishin' and wishin' and wishin' and wishin'\nThey wishin' on me, yeah\nI been movin' calm, don't start no trouble with me\nTryna keep it peaceful is a struggle for me\nDon't pull up at 6 AM to cuddle with me\nYou know how I like it when you lovin' on me\nI don't wanna die for them",
+                     "https://genius.com/Drake-gods-plan-lyrics"),
+                ]
                 
-                song_id = cursor.lastrowid
+                # Insert each sample song into the database
+                for song in sample_songs:
+                    cursor.execute('''
+                    INSERT INTO songs (title, album, release_date, lyrics, lyrics_url)
+                    VALUES (?, ?, ?, ?, ?)
+                    ''', song)
+                    
+                    song_id = cursor.lastrowid
+                    
+                    # Add sample sentiment analysis
+                    db.save_sentiment_analysis(song_id, "VADER", 0.5, "Neutral")
+                    db.save_sentiment_analysis(song_id, "TextBlob", 0.3, "Slightly Positive")
                 
-                # Add sample sentiment analysis
-                db.save_sentiment_analysis(song_id, "VADER", 0.5, "Neutral")
-                db.save_sentiment_analysis(song_id, "TextBlob", 0.3, "Slightly Positive")
-            
-            conn.commit()
-            
-        except Exception as e:
-            st.error(f"Error initializing sample data: {e}")
-        finally:
-            conn.close()
+                conn.commit()
+                
+            except Exception as e:
+                st.error(f"Error adding sample data: {str(e)}")
+    except Exception as e:
+        st.error(f"Database initialization error: {str(e)}")
 
 
 # Main application
@@ -245,35 +264,37 @@ def main():
             
             if submit:
                 if explanation:
-                    # Convert radio selection to boolean for database
-                    is_accurate_bool = None
-                    if is_accurate == "Yes":
-                        is_accurate_bool = True
-                    elif is_accurate == "No":
-                        is_accurate_bool = False
-                    
-                    # Save to database
-                    conn = db._get_connection()
-                    cursor = conn.cursor()
-                    
-                    cursor.execute('''
-                    INSERT INTO sentiment_qa 
-                    (song_id, sentiment_analysis_id, explanation, feedback, is_accurate, reviewer)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ''', (
-                        selected_analysis['song_id'],
-                        selected_analysis['id'],
-                        explanation,
-                        feedback,
-                        is_accurate_bool,
-                        reviewer
-                    ))
-                    
-                    conn.commit()
-                    conn.close()
-                    
-                    st.success("Thank you for your feedback!")
-                    st.balloons()
+                    try:
+                        # Convert radio selection to boolean for database
+                        is_accurate_bool = None
+                        if is_accurate == "Yes":
+                            is_accurate_bool = True
+                        elif is_accurate == "No":
+                            is_accurate_bool = False
+                        
+                        # Save to database
+                        conn = db._get_connection()
+                        cursor = conn.cursor()
+                        
+                        cursor.execute('''
+                        INSERT INTO sentiment_qa 
+                        (song_id, sentiment_analysis_id, explanation, feedback, is_accurate, reviewer)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ''', (
+                            selected_analysis['song_id'],
+                            selected_analysis['id'],
+                            explanation,
+                            feedback,
+                            is_accurate_bool,
+                            reviewer
+                        ))
+                        
+                        conn.commit()
+                        
+                        st.success("Thank you for your feedback!")
+                        st.balloons()
+                    except Exception as e:
+                        st.error(f"Error saving feedback: {str(e)}")
                 else:
                     st.error("Please provide an explanation for your feedback.")
     
